@@ -1,0 +1,14 @@
+# expect: DEPENDENCY_IN_PROJECT
+#7 [4/6] RUN pip install --no-cache-dir -r requirements.txt
+#7 1.204 ERROR: Could not find a version that satisfies the requirement flaskk==3.0.3 (from versions: none)
+#7 1.205 ERROR: No matching distribution found for flaskk==3.0.3
+#7 ERROR: process "/bin/sh -c pip install --no-cache-dir -r requirements.txt" did not complete successfully: exit code: 1
+
+------
+ > [4/6] RUN pip install --no-cache-dir -r requirements.txt:
+------
+Dockerfile:5
+--------------------
+   5 | >>> RUN pip install --no-cache-dir -r requirements.txt
+--------------------
+ERROR: failed to solve: process "/bin/sh -c pip install --no-cache-dir -r requirements.txt" did not complete successfully: exit code: 1

@@ -1,0 +1,6 @@
+# expect: LOCKFILE_MISSING
+#7 [3/5] RUN npm ci --omit=dev
+#7 1.1 npm error code EUSAGE
+#7 1.1 npm error The `npm ci` command can only install with an existing package-lock.json or
+#7 1.1 npm error npm-shrinkwrap.json with lockfileVersion >= 1.
+#7 ERROR: process "/bin/sh -c npm ci --omit=dev" did not complete successfully: exit code: 1

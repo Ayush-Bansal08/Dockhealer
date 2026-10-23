@@ -1,0 +1,4 @@
+# expect: PERMISSION_DENIED
+#9 [5/6] RUN mkdir /app/data
+#9 0.4 mkdir: cannot create directory '/app/data': Permission denied
+#9 ERROR: process "/bin/sh -c mkdir /app/data" did not complete successfully: exit code: 1

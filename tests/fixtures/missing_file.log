@@ -1,0 +1,16 @@
+# expect: MISSING_FILE
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 312B done
+#1 DONE 0.0s
+
+#6 [3/5] COPY reqs.txt .
+#6 ERROR: failed to calculate checksum of ref 2c8d::abc: "/reqs.txt": not found
+
+------
+ > [3/5] COPY reqs.txt .:
+------
+Dockerfile:3
+--------------------
+   3 | >>> COPY reqs.txt .
+--------------------
+ERROR: failed to solve: failed to compute cache key: failed to calculate checksum of ref 2c8d::abc: "/reqs.txt": not found

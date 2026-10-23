@@ -1,0 +1,2 @@
+# expect: DISK_FULL
+#7 ERROR: failed to copy: write /var/lib/docker/tmp/x: no space left on device

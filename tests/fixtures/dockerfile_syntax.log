@@ -1,0 +1,5 @@
+# expect: DOCKERFILE_SYNTAX
+#1 [internal] load build definition from Dockerfile
+#1 ERROR: failed to solve: dockerfile parse error on line 6: unknown instruction: INSTALL
+
+ERROR: failed to solve: dockerfile parse error on line 6: unknown instruction: INSTALL

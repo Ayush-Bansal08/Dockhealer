@@ -1,0 +1,4 @@
+# expect: COMMAND_NOT_FOUND
+#8 [3/5] RUN curl -fsSL https://example.com/file -o file
+#8 0.3 /bin/sh: 1: curl: not found
+#8 ERROR: process "/bin/sh -c curl -fsSL https://example.com/file -o file" did not complete successfully: exit code: 127

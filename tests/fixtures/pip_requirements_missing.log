@@ -1,0 +1,7 @@
+# expect: MISSING_FILE
+#7 [4/6] RUN pip install --no-cache-dir -r requirement.txt
+#7 1.212 ERROR: Could not open requirements file: [Errno 2] No such file or directory: 'requirement.txt'
+#7 ERROR: process "/bin/sh -c pip install --no-cache-dir -r requirement.txt" did not complete successfully: exit code: 1
+
+Dockerfile:4
+ERROR: failed to solve: process "/bin/sh -c pip install --no-cache-dir -r requirement.txt" did not complete successfully: exit code: 1

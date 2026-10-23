@@ -1,0 +1,8 @@
+# expect: DEPENDENCY_IN_DOCKERFILE
+#7 [4/6] RUN pip install --no-cache-dir flaskk
+#7 1.204 ERROR: Could not find a version that satisfies the requirement flaskk (from versions: none)
+#7 1.205 ERROR: No matching distribution found for flaskk
+#7 ERROR: process "/bin/sh -c pip install --no-cache-dir flaskk" did not complete successfully: exit code: 1
+
+Dockerfile:5
+ERROR: failed to solve: process "/bin/sh -c pip install --no-cache-dir flaskk" did not complete successfully: exit code: 1

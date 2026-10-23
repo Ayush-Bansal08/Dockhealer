@@ -1,0 +1,5 @@
+# expect: DEPENDENCY_IN_PROJECT
+#7 [3/5] RUN npm install --omit=dev
+#7 3.2 npm error code E404
+#7 3.2 npm error 404 Not Found - GET https://registry.npmjs.org/expresss - Not found
+#7 ERROR: process "/bin/sh -c npm install --omit=dev" did not complete successfully: exit code: 1

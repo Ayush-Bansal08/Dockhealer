@@ -1,0 +1,4 @@
+# expect: UNKNOWN
+#9 [5/5] RUN make all
+#9 0.8 make: *** [Makefile:3: all] Error 2
+#9 ERROR: process "/bin/sh -c make all" did not complete successfully: exit code: 2

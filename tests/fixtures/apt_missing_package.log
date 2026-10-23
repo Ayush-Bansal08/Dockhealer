@@ -1,0 +1,4 @@
+# expect: DEPENDENCY_IN_DOCKERFILE
+#8 [3/6] RUN apt-get update && apt-get install -y libfoo-dev
+#8 2.1 E: Unable to locate package libfoo-dev
+#8 ERROR: process "/bin/sh -c apt-get update && apt-get install -y libfoo-dev" did not complete successfully: exit code: 100
