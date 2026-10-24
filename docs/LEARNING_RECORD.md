@@ -17,12 +17,7 @@
 
 - Phase 4 (4.2-4.5, written up in docs/PHASE4_LESSONS.md): build context/layers, staged context, dependency injection, ordered-rule classifier, repair/retry/stop policy
 
-## Phase 7 completed
-- Added `dockhealer evaluate` for baseline and failure-injection regression testing.
-- Offline evaluation: 3/3 baselines validate cleanly; 1/5 injected failures is rejected before Docker.
-- Real Docker evaluation: remaining 4/4 builds failed as intended and were classified as
-  `LOCKFILE_MISSING`, `DEPENDENCY_IN_DOCKERFILE`, `BASE_IMAGE_NOT_FOUND`, and `MISSING_FILE`.
-- The evaluation is deliberately not a model-quality or security proof; it is a small regression corpus.
-
 ## Next
-- Phase 8 is optional Terraform/Azure deployment, only after reviewing the local results and costs.
+- Learner answers to the 4.1 exercise and the three weakness exercises in PHASE4_LESSONS.md
+- Run real builds on the user's machine and capture real fixtures
+- Phase 5: bounded repair loop

@@ -8,9 +8,11 @@
 | 4 | Build + capture/classify errors | done here: 95 tests, mutation-checked, simulated e2e; REAL docker build not yet run (user machine) |
 | 5 | Bounded repair loop | done here: 128 tests, 8 mutations caught, simulated e2e; real model+docker run pending (user machine) |
 | 6 | Smoke test + Trivy scan | done here: 165 tests, 8 mutations caught, simulated e2e with real HTTP probe; real Docker run + real Trivy pending (user machine) |
-| 7 | Failure injection + evaluation vs baseline | done: offline corpus evaluation, optional real Docker builds, report |
+| 7 | Failure injection + evaluation vs baseline | next |
 | 8 | Terraform + Azure (optional; only after 1-7 verified) | |
 
 ## Verification notes
 - Sandbox used by the assistant: Docker CLI present but NO daemon; Ollama not installed;
   PyPI blocked. So Docker/Ollama behaviour must be confirmed on the user's machine.
+- Phase 7 DONE (code + tests, 183 passing): failure injection scenarios, `heal(initial_dockerfile)`, `evaluate.py`, `dockhealer eval`, EVAL_PROTOCOL. Real measured results: PENDING (run on your machine).
+- Phase 8 (optional Terraform/Azure): NOT started. Nothing will be applied without your explicit approval.

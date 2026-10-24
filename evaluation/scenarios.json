@@ -1,0 +1,15 @@
+{
+  "_comment": "Scenario manifest. Edit BEFORE running, never after seeing results. expect_outcome: healed = generation scenario should end healthy; repaired = injected fault should be fixed by the loop; human_required = the loop must STOP and hand over without a repair.",
+  "scenarios": [
+    {"id": "gen-flask",   "kind": "generate", "project": "examples/flask_app",   "reference": "baselines/flask_app.Dockerfile",   "expect_outcome": "healed"},
+    {"id": "gen-fastapi", "kind": "generate", "project": "examples/fastapi_app", "reference": "baselines/fastapi_app.Dockerfile", "expect_outcome": "healed"},
+    {"id": "gen-express", "kind": "generate", "project": "examples/express_app", "reference": "baselines/express_app.Dockerfile", "expect_outcome": "healed"},
+    {"id": "inj-bad-base-image",   "kind": "inject", "project": "examples/flask_app",   "dockerfile": "failures/flask__bad_base_image.Dockerfile",        "expect_category": "BASE_IMAGE_NOT_FOUND",     "expect_outcome": "repaired"},
+    {"id": "inj-typo-requirements","kind": "inject", "project": "examples/flask_app",   "dockerfile": "failures/flask__typo_requirements_path.Dockerfile", "expect_category": "MISSING_FILE",             "expect_outcome": "repaired"},
+    {"id": "inj-apt-missing-pkg",  "kind": "inject", "project": "examples/flask_app",   "dockerfile": "failures/flask__apt_missing_package.Dockerfile",    "expect_category": "DEPENDENCY_IN_DOCKERFILE", "expect_outcome": "repaired"},
+    {"id": "inj-missing-copy-src", "kind": "inject", "project": "examples/flask_app",   "dockerfile": "failures/flask__missing_copy_source.Dockerfile",    "expect_category": "VALIDATION",               "expect_outcome": "repaired"},
+    {"id": "inj-npm-ci-no-lock",   "kind": "inject", "project": "examples/express_app", "dockerfile": "failures/express__npm_ci_no_lockfile.Dockerfile",   "expect_category": "LOCKFILE_MISSING",         "expect_outcome": "repaired"},
+    {"id": "inj-localhost-bind",   "kind": "inject", "project": "examples/flask_app",   "dockerfile": "failures/flask__localhost_bind.Dockerfile",         "expect_category": "UNREACHABLE",              "expect_outcome": "repaired"},
+    {"id": "stop-bad-pin",         "kind": "inject", "project": "examples/broken/flask_bad_pin", "dockerfile": "failures/flask_bad_pin__good_dockerfile_bad_project.Dockerfile", "expect_category": "DEPENDENCY_IN_PROJECT", "expect_outcome": "human_required"}
+  ]
+}

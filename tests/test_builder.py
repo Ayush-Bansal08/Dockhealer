@@ -65,12 +65,7 @@ class StagedContextTests(unittest.TestCase):
 
 class RunBuildTests(unittest.TestCase):
     def setUp(self):
-        project = tempfile.TemporaryDirectory()
-        self.addCleanup(project.cleanup)
-        root = Path(project.name)
-        (root / "requirements.txt").write_text("flask\n")
-        (root / "app.py").write_text("from flask import Flask\napp = Flask(__name__)\n")
-        self.info = scanner.scan(root)
+        self.info = scanner.scan(ROOT / "examples" / "flask_app")
 
     def test_command_is_a_list_with_expected_flags_and_a_timeout(self):
         runner = MagicMock(side_effect=[completed(0, stderr="#1 DONE"), completed(0, stdout="123456\n")])

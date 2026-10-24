@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import asdict
 
 from . import __version__, builder, diagnose, doctor, evaluate, generator, healer, scanner, smoke, validator, vulnscan
@@ -154,6 +155,44 @@ def _bounded(lo: int, hi: int):
     return parse
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    import datetime
+    import platform
+    if args.report_only:
+        d = Path(args.report_only)
+        rows = [json.loads(l) for l in (d / "results.jsonl").read_text().splitlines() if l.strip()]
+        meta = json.loads((d / "meta.json").read_text())
+        (d / "report.md").write_text(evaluate.render_markdown(rows, meta))
+        print(f"re-rendered {d / 'report.md'} from {len(rows)} stored rows")
+        return 0
+    try:
+        scenarios = evaluate.load_scenarios(args.scenarios, args.root)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"error: bad scenarios: {e}", file=sys.stderr)
+        return 2
+    settings = Settings.from_env()
+    client = OllamaClient(settings)
+    smoke_fn = None if args.no_smoke else smoke.run_smoke
+    scan_fn = vulnscan.to_dict_scan if args.scan else None
+
+    def heal_fn(info, *, initial_dockerfile, max_attempts):
+        return healer.heal(info, client, max_attempts=max_attempts, build_timeout_s=args.timeout,
+                           smoke_fn=smoke_fn, scan_fn=scan_fn, initial_dockerfile=initial_dockerfile)
+    only = set(args.only.split(",")) if args.only else None
+    n_runs = sum(1 for s in scenarios if not only or s.id in only)
+    print(f"{n_runs} scenarios x {args.trials} trials; this builds many images and calls the model many times. Ctrl-C is safe.")
+    rows = evaluate.run_eval(scenarios, trials=args.trials, heal_fn=heal_fn, root=args.root, max_attempts=args.max_attempts,
+                             only=only, say=lambda m: print(m, flush=True))
+    meta = {"model": settings.model, "trials": args.trials, "max_attempts": args.max_attempts,
+            "smoke": "off" if args.no_smoke else "on", "scan": "on" if args.scan else "off",
+            "date": datetime.date.today().isoformat(), "environment": f"{platform.system()} {platform.release()}, python {platform.python_version()}",
+            "provenance": args.provenance}
+    out = Path(args.out) if args.out else Path("runs") / f"eval-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+    jl, md = evaluate.write_results(rows, meta, out)
+    print(f"\nrows: {jl}\nreport: {md}")
+    return 0
+
+
 def cmd_heal(args: argparse.Namespace) -> int:
     try:
         info = scanner.scan(args.path)
@@ -247,31 +286,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_evaluate(args: argparse.Namespace) -> int:
-    report = evaluate.evaluate(args.root, build=args.build, timeout_s=args.timeout)
-    if args.report:
-        evaluate.write_report(report, args.report)
-    print("BASELINES")
-    for case in report.baselines:
-        print(f"  {case.name:<42} {'PASS' if case.validation_ok else 'FAIL'}")
-    print("FAILURE INJECTIONS")
-    for case in report.failures:
-        if not case.validation_ok:
-            status = "CAUGHT BY VALIDATOR"
-        elif case.build_success is False:
-            status = f"CAUGHT BY BUILD ({case.diagnosis or 'UNKNOWN'})"
-        elif case.build_success is True:
-            status = "REGRESSION: BUILD SUCCEEDED"
-        else:
-            status = "NOT BUILT"
-        print(f"  {case.name:<42} {status}")
-    mode = "with Docker builds" if args.build else "validation-only"
-    print(f"\nEVALUATION: {'PASS' if report.success else 'FAIL'} ({mode})")
-    if args.report:
-        print(f"report: {args.report}")
-    return 0 if report.success else 4
-
-
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="dockhealer", description=__doc__)
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -332,12 +346,20 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--fail-on", choices=vulnscan.SEVERITY_ORDER, help="exit 4 if any finding is at/above this severity")
     sc.set_defaults(func=cmd_scan)
 
-    ev = sub.add_parser("evaluate", help="run the baseline and failure-injection evaluation")
-    ev.add_argument("--root", default=".", help="repository root (default: current directory)")
-    ev.add_argument("--build", action="store_true", help="also build valid cases with Docker")
-    ev.add_argument("--timeout", type=float, default=builder.DEFAULT_TIMEOUT_S)
-    ev.add_argument("--report", help="write a machine-readable JSON report")
-    ev.set_defaults(func=cmd_evaluate)
+    ev = sub.add_parser("eval", help="run the evaluation scenarios (needs Docker + Ollama; see docs/EVAL_PROTOCOL.md)")
+    ev.add_argument("--scenarios", default="evaluation/scenarios.json")
+    ev.add_argument("--root", default=".", help="directory the scenario paths are relative to")
+    ev.add_argument("--trials", type=_bounded(1, 10), default=3)
+    ev.add_argument("--max-attempts", type=_bounded(1, 10), default=3)
+    ev.add_argument("--timeout", type=float, default=builder.DEFAULT_TIMEOUT_S, help="per-build timeout, seconds")
+    ev.add_argument("--only", help="comma-separated scenario ids")
+    ev.add_argument("--no-smoke", action="store_true")
+    ev.add_argument("--scan", action="store_true", help="Trivy-scan each healthy image (needs trivy)")
+    ev.add_argument("--out", help="output directory (default runs/eval-<time>)")
+    ev.add_argument("--provenance", default="measured by `dockhealer eval` on the environment above",
+                    help="free-text label stored in the report")
+    ev.add_argument("--report-only", metavar="DIR", help="re-render report.md from an earlier results directory; runs nothing")
+    ev.set_defaults(func=cmd_eval)
 
     a = sub.add_parser("ask", help="send one prompt to the local model (smoke test)")
     a.add_argument("prompt")

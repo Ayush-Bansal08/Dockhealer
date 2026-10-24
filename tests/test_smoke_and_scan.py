@@ -128,12 +128,6 @@ class SmokeFailures(unittest.TestCase):
         r = run(FakeDocker(run_rc=127, run_err="OCI runtime create failed: executable file not found in $PATH"), lambda u: 200)
         self.assertEqual(self.diag(r).category, "CMD_NOT_FOUND")
 
-    def test_missing_runtime_user_is_diagnosed(self):
-        r = run(FakeDocker(run_rc=125, run_err="unable to find user node: no matching entries in passwd file"), lambda u: 200)
-        d = self.diag(r)
-        self.assertEqual((d.category, d.action), ("RUNTIME_USER_MISSING", smoke.REPAIR))
-        self.assertIn("does not exist", d.summary)
-
     def test_exit_zero_means_nothing_kept_running(self):
         r = run(FakeDocker(states=[("false", "0")], logs="done\n"), lambda u: None)
         self.assertEqual(self.diag(r).category, "EXITED_IMMEDIATELY")

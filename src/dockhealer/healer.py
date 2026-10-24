@@ -35,7 +35,7 @@ ENVIRONMENT = "environment"
 @dataclass
 class Attempt:
     number: int
-    kind: str                      # generate | repair | retry
+    kind: str                      # generate | provided | repair | retry
     outcome: str                   # built | invalid | build_failed | no_dockerfile
     dockerfile: str = ""
     findings: list[dict] = field(default_factory=list)
@@ -81,15 +81,16 @@ def heal(info: ProjectInfo, client, *, max_attempts: int = 3, max_retries: int =
          build_timeout_s: float = builder.DEFAULT_TIMEOUT_S, keep_image: bool = False,
          build_fn: Callable = builder.run_build, remove_fn: Callable = builder.remove_image,
          smoke_fn: Callable | None = None, scan_fn: Callable | None = None,
+         initial_dockerfile: str | None = None,
          clock: Callable[[], float] = time.monotonic, say: Callable[[str], None] = lambda _m: None) -> HealReport:
     start = clock()
     attempts: list[Attempt] = []
     llm_calls = builds = retries = 0
     seen_dockerfiles: set[str] = set()
     seen_failures: set[tuple] = set()
-    current: str | None = None      # last candidate Dockerfile
+    current: str | None = initial_dockerfile   # last candidate Dockerfile (failure injection starts from a given one)
     problem: str = ""               # what the model is told on the next repair
-    step = "generate"               # generate | repair | retry
+    step = "provided" if initial_dockerfile is not None else "generate"   # generate | repair | retry | provided
     model = None
     prev_warning_rules: set[str] = set()
 
@@ -131,9 +132,10 @@ def heal(info: ProjectInfo, client, *, max_attempts: int = 3, max_retries: int =
                 current = candidate
                 return finish(False, NO_PROGRESS, "the model returned a Dockerfile it had already tried")
             current = candidate
-        else:  # retry: identical Dockerfile, no model call
+        else:  # retry or provided: no model call
             candidate = current or ""
-            say(f"attempt {n} [retry]: rebuilding the same Dockerfile after a transient failure ...")
+            say(f"attempt {n} [{step}]: " + ("using the supplied Dockerfile ..." if step == "provided"
+                                              else "rebuilding the same Dockerfile after a transient failure ..."))
         attempt.dockerfile = candidate
         seen_dockerfiles.add(_norm(candidate))
 
