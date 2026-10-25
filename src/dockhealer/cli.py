@@ -229,9 +229,11 @@ def cmd_heal(args: argparse.Namespace) -> int:
               f"{'PASS' if sm['ok'] else 'FAIL'}  GET {sm['path']} -> {sm['status']}" if sm["ok"] else "FAIL"))
     if last and last.scan:
         print("vulnerability scan: " + vulnscan.summarize(vulnscan.ScanResult(**last.scan)))
-    if report.success and args.out:
+    if report.success:
+        destination = args.out or args.path
         try:
-            print(f"wrote {generator.write_dockerfile(report.final_dockerfile, args.out, force=args.force)}")
+            # Only a successful heal replaces the project's Dockerfile.
+            print(f"wrote {generator.write_dockerfile(report.final_dockerfile, destination, force=args.force or not args.out)}")
         except FileExistsError as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
@@ -326,7 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("--max-attempts", type=_bounded(1, 10), default=3, help="max model calls (1 generation + repairs), 1-10")
     h.add_argument("--max-retries", type=_bounded(0, 3), default=1, help="unchanged rebuilds after a network failure, 0-3")
     h.add_argument("--timeout", type=float, default=builder.DEFAULT_TIMEOUT_S, help="seconds per docker build")
-    h.add_argument("--out", help="write the final Dockerfile into this directory (only if it built)")
+    h.add_argument("--out", help="write the final Dockerfile into this directory instead of the project directory")
     h.add_argument("--force", action="store_true", help="overwrite an existing Dockerfile in --out")
     h.add_argument("--keep-image", action="store_true")
     h.add_argument("--no-smoke", action="store_true", help="skip starting the container to test it")

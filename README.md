@@ -33,6 +33,9 @@ dockhealer eval --trials 3 --scan   # failure injection + evaluation (many build
 pytest -v                           # or: python -m unittest discover -s tests -v
 ```
 
+`dockhealer heal` writes the final Dockerfile into the project directory only after the image
+build and smoke test succeed. Use `--out DIR` to write the successful result somewhere else.
+
 Configuration (all optional): `DOCKHEALER_MODEL`, `DOCKHEALER_OLLAMA_HOST`, `DOCKHEALER_TIMEOUT`.
 
 ## Layout

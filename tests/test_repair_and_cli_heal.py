@@ -84,16 +84,30 @@ class HealCommandTests(unittest.TestCase):
         self.assertEqual((out / "Dockerfile").read_text(), GOOD)
         self.assertTrue((self.tmp_path / "rep" / "report.json").exists())
 
+    def test_success_writes_final_dockerfile_to_project_by_default(self):
+        project = self.tmp_path / "project"
+        project.mkdir()
+        (project / "Dockerfile").write_text("broken candidate")
+        report_dir = self.tmp_path / "rep"
+        with patch("dockhealer.cli.scanner.scan", return_value=scanner.scan(FLASK)), \
+             patch("dockhealer.cli.healer.heal", return_value=fake_report(True)):
+            code, stdout, _ = run(["heal", str(project), "--report-dir", str(report_dir)])
+        self.assertEqual(code, 0)
+        self.assertIn(f"wrote {project / 'Dockerfile'}", stdout)
+        self.assertEqual((project / "Dockerfile").read_text(), GOOD)
+        self.assertTrue((report_dir / "report.json").exists())
+
     def test_failure_exit_4_and_nothing_written(self):
         out = self.tmp_path / "out"
         out.mkdir()
+        (out / "Dockerfile").write_text("current Dockerfile")
         with patch("dockhealer.cli.healer.heal", return_value=fake_report(False, healer.HUMAN_REQUIRED)):
             code, stdout, _ = run(["heal", FLASK, "--out", str(out), "--report-dir", str(self.tmp_path / "rep")])
         self.assertEqual(code, 4)
         self.assertIn("NOT HEALED", stdout)
-        self.assertFalse((out / "Dockerfile").exists())
+        self.assertEqual((out / "Dockerfile").read_text(), "current Dockerfile")
 
-    def test_existing_dockerfile_is_not_overwritten_without_force(self):
+    def test_existing_alternate_output_is_not_overwritten_without_force(self):
         out = self.tmp_path / "out"
         out.mkdir()
         (out / "Dockerfile").write_text("mine")
