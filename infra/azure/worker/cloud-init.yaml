@@ -1,0 +1,17 @@
+
+#cloud-config
+
+package_update: true
+
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - python3
+  - python3-venv
+  - python3-pip
+
+runcmd:
+  - [bash, -lc, "echo 'DockHealer bootstrap started' > /var/log/dockhealer-bootstrap.log"]
+
