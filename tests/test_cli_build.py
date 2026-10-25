@@ -58,7 +58,11 @@ class BuildCommandTests(unittest.TestCase):
         self.assertIn("E004", out)
 
     def test_missing_dockerfile_gives_helpful_error(self):
-        code, _, err = run(["build", FLASK])  # examples/flask_app has no Dockerfile
+        with tempfile.TemporaryDirectory() as d:
+            project = Path(d)
+            (project / "requirements.txt").write_text("flask\n")
+            (project / "app.py").write_text("from flask import Flask\n")
+            code, _, err = run(["build", str(project)])
         self.assertEqual(code, 2)
         self.assertIn("generate --out", err)
 

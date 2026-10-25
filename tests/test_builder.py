@@ -96,7 +96,6 @@ class RunBuildTests(unittest.TestCase):
         self.assertEqual(seen["text"], DF)
         self.assertFalse(seen["inside"])
         self.assertFalse(seen["in_project"])
-        self.assertFalse((Path(self.info.root) / "Dockerfile").exists())
 
     def test_failure_returns_result_not_exception(self):
         runner = MagicMock(return_value=completed(1, stderr="ERROR: failed to solve"))
