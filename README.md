@@ -17,9 +17,9 @@ answers HTTP, and when the process must stop.
 > **Project status:** implemented engineering project. The evaluation harness is included, but no
 > evaluation numbers are published in this repository. A real evaluation requires Docker and Ollama.
 
-**Start here:** [Quick start](#quick-start) · [How it works](#how-it-works) ·
-[Azure deployment](#azure-deployment-from-terraform-to-a-working-healing-pipeline) ·
-[CLI reference](#cli-reference) · [Security and limitations](#security-and-limitations)
+**Start here:** [Architecture](#how-it-works) · [Demonstrated result](#demonstrated-end-to-end-healing-result) ·
+[Quick start](#quick-start) ·
+[Azure deployment](#azure-deployment-from-terraform-to-a-working-healing-pipeline)
 
 ## What Is DockHealer?
 
@@ -41,12 +41,6 @@ bounded and can stop for a human when the problem is not an appropriate model re
 
 DockHealer is not a guarantee that every Docker or application problem can be repaired. The
 demonstrated smoke test proves startup and HTTP reachability, not application correctness.
-
-### Who is it for?
-
-- Developers who want project structure mapped to a reproducible Docker image.
-- Backend engineers who want a repeatable generate/build/start feedback loop.
-- DevOps and platform engineers exploring guardrails around AI-generated build artifacts.
 
 ### Implemented capabilities
 
@@ -129,19 +123,39 @@ The default healing budget is three model calls (`--max-attempts 1..10`) and one
 after a transient failure (`--max-retries 0..3`). The loop also stops on a terminal diagnosis,
 repeated failure, no progress, an unavailable environment, an LLM error, or an exhausted budget.
 
+### Failure recovery sequence
+
+```mermaid
+sequenceDiagram
+    participant C as CLI
+    participant H as Healing loop
+    participant D as Docker
+    participant M as Ollama
+    C->>H: heal project
+    H->>M: generate Dockerfile
+    H->>D: validate and build candidate
+    D-->>H: image builds, container fails at startup
+    H->>H: classify redacted runtime evidence
+    H->>M: repair Dockerfile with bounded attempt
+    M-->>H: repaired candidate
+    H->>D: validate, rebuild, and smoke test
+    D-->>H: GET /health -> 200
+    H-->>C: HEALED + report.json
+```
+
 ## Technology stack
 
-| Technology | Role |
-|---|---|
-| Python 3.11+ | CLI and library implementation; packaged with setuptools |
-| `requests` | Small typed HTTP client for the Ollama API |
-| Docker Engine | Builds images and runs the smoke-test containers |
-| Ollama | Local model server; the default model is `qwen2.5-coder:3b` |
-| `pytest` | Development/test dependency used by the CI workflow |
-| Trivy | Optional image vulnerability scanner |
-| Terraform + AzureRM | Provisions the optional Azure test VM and network |
-| Ubuntu 22.04 | Azure VM image used by the Terraform configuration |
-| GitHub Actions | Runs the test suite on Python 3.11 and 3.12 |
+| Technology | Role in DockHealer | Scope |
+|---|---|---|
+| Python 3.11+ | CLI and library implementation; packaged with setuptools | Runtime |
+| `requests` | Typed HTTP client for the Ollama API | Runtime |
+| Docker Engine | Builds images and runs smoke-test containers | Runtime |
+| Ollama | Local model server; default model is `qwen2.5-coder:3b` | Runtime |
+| Trivy | Optional image vulnerability scanner | Runtime, optional |
+| `pytest` | Test runner used locally and in CI | Development |
+| GitHub Actions | Runs tests on Python 3.11 and 3.12 | Development |
+| Terraform + AzureRM | Provisions the test VM, network, and SSH boundary | Cloud deployment |
+| Ubuntu 22.04 | Azure VM operating system image | Cloud deployment |
 
 The core runtime does not use Kubernetes, AKS, a hosted LLM, or a database. `uv` is a convenient
 Python installation/environment tool used in the Azure setup notes; it is not a Python dependency
@@ -379,7 +393,7 @@ baselines/                  hand-written reference Dockerfiles
 failures/                   intentional failure-injection Dockerfiles
 evaluation/                 scenario manifest and evaluation inputs
 infra/azure/worker/         Terraform, variables, outputs, and cloud-init
-docs/                       deployment, evaluation, lessons, and interview notes
+docs/                       deployment, evaluation, lessons, and engineering notes
 runs/                       generated run/evaluation artifacts when created locally
 ```
 
@@ -432,42 +446,6 @@ Potential next steps include stronger build isolation, richer repair-success mea
 integration, more representative applications, structured observability, and a web/API interface.
 None of these should be read as implemented functionality.
 
-## Questions interviewers may ask
-
-**Why is a successful image build insufficient?** A build only proves the image layers can be
-created. The smoke test exercises startup and HTTP reachability, catching runtime-user, command,
-module, file-path, and bind-address failures.
-
-**How does DockHealer know what to repair?** Ordered deterministic diagnosis rules classify
-validator findings, build logs, or redacted container logs and provide evidence to the repair prompt.
-
-**How does the loop stop?** It stops on success, terminal diagnosis, repeated failure, no progress,
-environment/LLM failure, max model calls, or exhausted transient retries.
-
-**Why use Ollama?** It provides a local HTTP model service without a paid provider or external API
-credential. The trade-off is local compute and model capability.
-
-**Why Terraform?** The Azure network, VM, SSH policy, and outputs are repeatable and reviewable as
-code. Terraform does not replace the manual Docker/Ollama bootstrap in this project.
-
-**Why a VM instead of AKS?** The current CLI needs a Docker daemon and local Ollama on one worker.
-AKS would add operational complexity without a current multi-worker service to orchestrate.
-
-**What if the model emits invalid Dockerfile text?** The extractor/validator rejects it, no build
-is started, and a repair attempt may be made until the model budget is exhausted.
-
-**How would you safely run untrusted projects?** Move execution to stronger isolation such as a
-throw-away VM or sandbox, add network/resource policy, and keep the worker separate from sensitive
-systems. Current Docker hardening reduces risk but is not a perfect sandbox.
-
-**What are the current limitations?** Small models may fail repairs; the corpus is small; smoke
-testing proves reachability rather than business behavior; and there is no hosted API or
-multi-tenant control plane.
-
-**How would you scale it?** Preserve the scanner/validator/report contracts, then add an
-authenticated job service, a queue, isolated workers, artifact retention, structured events, and
-model/build capacity controls. That is a larger architecture than the current CLI.
-
 ## Contributing
 
 Create a focused branch, add or update tests for behavior changes, run `pytest -q`, and keep
@@ -484,6 +462,5 @@ license before presenting DockHealer as reusable under specific terms.
 
 - [Evaluation protocol](./docs/EVAL_PROTOCOL.md)
 - [Deployment plan and trade-offs](./docs/DEPLOYMENT_PLAN.md)
-- [Interview Q&A](./docs/INTERVIEW_QA.md)
 - [Azure Terraform module](./infra/azure/worker/)
 - [CI workflow](./.github/workflows/ci.yml)
