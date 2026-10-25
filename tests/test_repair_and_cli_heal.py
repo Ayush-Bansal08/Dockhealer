@@ -30,6 +30,11 @@ class RepairPromptTests(unittest.TestCase):
         self.assertIn("untrusted", repair.REPAIR_SYSTEM)
         self.assertIn("Never ask to edit application source", repair.REPAIR_SYSTEM)
 
+    def test_generation_guidance_matches_base_image_users(self):
+        self.assertIn("Python images do not", repair.SYSTEM_PROMPT)
+        self.assertIn("create an app user", repair.SYSTEM_PROMPT)
+        self.assertIn("do not write `exec` as an item", repair.SYSTEM_PROMPT)
+
     def test_build_failure_description(self):
         log = '#7 ERROR: process "/bin/sh -c apt-get install -y x" did not complete successfully: exit code: 100\n#7 E: Unable to locate package x\nDockerfile:3\n'
         res = BuildResult(False, 1, 1.0, log, "t:1")

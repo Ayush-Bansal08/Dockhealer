@@ -19,9 +19,11 @@ Hard requirements:
 - Use a pinned, slim official base image tag (never :latest).
 - WORKDIR /app. Copy the dependency file first, install dependencies, THEN copy the rest of the source (layer caching).
 - Install Python packages with pip --no-cache-dir. For Node use npm install --omit=dev (there may be no lockfile).
-- Create and switch to a non-root user (Node official images already provide user `node`).
+- Create and switch to a non-root user. Node official images provide user `node`; Python images do not,
+  so create an app user with `useradd` before `USER`, or use the base image's documented user.
 - EXPOSE the port given in the project facts.
 - Start the app with the exact start command from the project facts, in exec (JSON array) form, listening on 0.0.0.0.
+  The first JSON item must be the real executable (`python`, `node`, `uvicorn`, etc.); do not write `exec` as an item.
 - Only COPY files that appear in the file tree. Never invent files. Never put secrets in ENV or ARG.
 - Never pipe curl or wget into a shell."""
 

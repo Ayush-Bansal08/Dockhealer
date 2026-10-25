@@ -125,6 +125,9 @@ def run_smoke(tag: str, info: ProjectInfo, *, startup_timeout_s: float = STARTUP
 
 # ---- runtime diagnosis: same idea as diagnose.py, for failures AFTER a successful build -------------
 _EXIT_RULES = [
+    ("RUNTIME_USER_NOT_FOUND", r"unable to find user .*no matching entries in passwd file",
+     REPAIR, "The Dockerfile selects a user that does not exist in the base image.",
+     "Remove USER or create that user before switching to it; Python images do not provide Node's `node` user."),
     ("CMD_NOT_FOUND", r"executable file not found|exec format error|not found in \$PATH|exec: .*: not found",
      REPAIR, "The container's start command does not exist in the image.",
      "Use a CMD whose program is installed in the image (python, node, uvicorn ...), in exec form."),
