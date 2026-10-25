@@ -14,7 +14,7 @@ answers HTTP, and when the process must stop.
 [![Ollama](https://img.shields.io/badge/LLM-Ollama-black)](https://ollama.com/)
 [![Terraform](https://img.shields.io/badge/infrastructure-Terraform-7B42BC?logo=terraform&logoColor=white)](https://www.terraform.io/)
 
-> **Project status:** active engineering project. The evaluation harness is implemented, but no
+> **Project status:** implemented engineering project. The evaluation harness is included, but no
 > evaluation numbers are published in this repository. A real evaluation requires Docker and Ollama.
 
 **Start here:** [Quick start](#quick-start) · [How it works](#how-it-works) ·
@@ -44,7 +44,7 @@ demonstrated smoke test proves startup and HTTP reachability, not application co
 
 ### Who is it for?
 
-- Developers learning how project structure maps to a Docker image.
+- Developers who want project structure mapped to a reproducible Docker image.
 - Backend engineers who want a repeatable generate/build/start feedback loop.
 - DevOps and platform engineers exploring guardrails around AI-generated build artifacts.
 
