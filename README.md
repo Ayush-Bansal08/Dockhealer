@@ -1,217 +1,182 @@
 # DockHealer
 
-### Generate a Dockerfile, test it like a real container, and make bounded repair attempts when it fails.
-
-DockHealer is a local Python CLI for turning a small Python or Node project into a Docker image. It
-combines deterministic project inspection and Dockerfile validation with a local Ollama model, a real
-Docker build, an HTTP smoke test, and a bounded repair loop. The model proposes Dockerfiles; ordinary
-code decides whether they are valid, whether Docker can build them, whether the resulting container
-answers HTTP, and when the process must stop.
+**Generate a Dockerfile with a local LLM, then *prove* it works: validate, build, run it, and repair it within hard limits.**
 
 [![CI](https://github.com/Ayush-Bansal08/Dockhealer/actions/workflows/ci.yml/badge.svg)](https://github.com/Ayush-Bansal08/Dockhealer/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/runtime-Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Ollama](https://img.shields.io/badge/LLM-Ollama-black)](https://ollama.com/)
-[![Terraform](https://img.shields.io/badge/infrastructure-Terraform-7B42BC?logo=terraform&logoColor=white)](https://www.terraform.io/)
+[![Ollama](https://img.shields.io/badge/LLM-Ollama%20(local)-black)](https://ollama.com/)
+[![Terraform](https://img.shields.io/badge/IaC-Terraform%20%2B%20AzureRM-7B42BC?logo=terraform&logoColor=white)](https://www.terraform.io/)
 
-> **Project status:** implemented engineering project. The evaluation harness is included, but no
-> evaluation numbers are published in this repository. A real evaluation requires Docker and Ollama.
+DockHealer is a Python CLI that containerises a small Python or Node project. A local Ollama model
+**proposes** a Dockerfile; ordinary, deterministic code **decides** whether to accept it: a rule-based
+validator, a real `docker build`, and a hardened container that must answer an HTTP request. When a
+step fails, the evidence is classified, redacted, and fed back for a **bounded** repair, or the tool
+stops and tells a human. No paid API and no GPU; with a local model, project source is not sent to a third-party service.
 
-**Start here:** [Architecture](#how-it-works) · [Demonstrated result](#demonstrated-end-to-end-healing-result) ·
-[Quick start](#quick-start) ·
-[Azure deployment](#azure-deployment-from-terraform-to-a-working-healing-pipeline)
+> **Status:** working project, v0.1.0. Verified here: 186 passing tests, a complete CLI, and Terraform
+> for an Azure test VM. **Not yet published: measured evaluation numbers** (they need real Docker and
+> Ollama; the harness is included). See [What is verified, and what is not](#what-is-verified-and-what-is-not).
 
-## What Is DockHealer?
+**Contents:** [Why](#the-problem) · [At a glance](#at-a-glance) · [Architecture](#architecture) ·
+[Engineering highlights](#engineering-highlights) · [Quick start](#quick-start) ·
+[Configuration](#configuration) · [CLI](#cli-reference) · [Testing](#testing) ·
+[Evaluation](#evaluation) · [Azure](#azure-deployment-terraform) · [Security](#security-model) ·
+[Troubleshooting](#troubleshooting) · [Decisions](#engineering-decisions-and-trade-offs) ·
+[Limitations](#known-limitations) · [Roadmap](#roadmap)
 
-### The problem
+---
 
-A Dockerfile can be syntactically plausible but still be wrong for its project. A Docker image may
-also build successfully and fail immediately when its container starts. Typical causes include a
-missing file, an unavailable dependency, a wrong `CMD`, a missing runtime user, or an application
-that only listens on `127.0.0.1`.
+## The problem
 
-### The solution
+An LLM can write a Dockerfile that looks right and is wrong in ways only execution reveals: a `COPY`
+of a file that does not exist, a base image tag that was never published, a `USER` that is not in the
+image, or an app that binds `127.0.0.1` so the running container is unreachable. Asking the model
+"is this correct?" is not evidence. Naively looping "ask again until it builds" is worse: it can
+burn unbounded time, follow instructions hidden in build logs, or "fix" a project bug by rewriting
+the wrong file.
 
-DockHealer scans a project without executing it, extracts facts such as its language, dependency
-file, entrypoint, and port, and gives that context to an Ollama model. Before any build, a
-deterministic validator checks the generated Dockerfile. If it passes, DockHealer builds it with
-the Docker CLI, optionally starts a constrained container, and probes `/health` and `/`.
-Build and runtime evidence can be classified and sent to a targeted repair prompt. The loop is
-bounded and can stop for a human when the problem is not an appropriate model repair.
+DockHealer treats the model as an unreliable component inside a deterministic harness: **every
+claim the model makes is checked by something that cannot be talked into agreeing.**
 
-DockHealer is not a guarantee that every Docker or application problem can be repaired. The
-demonstrated smoke test proves startup and HTTP reachability, not application correctness.
+## At a glance
 
-### Implemented capabilities
+| | |
+|---|---|
+| **Loop** | Inspect → Generate → Validate → Build → Smoke-test → Diagnose → Repair → Report |
+| **Stack** | Python 3.11+ (one runtime dependency: `requests`), Docker CLI, Ollama (`qwen2.5-coder:3b` default), optional Trivy |
+| **Size** | ~2,300 lines of Python in `src/dockhealer/` (14 modules), 186 tests |
+| **Deterministic checks** | 7 error rules + 9 warning rules (validator); 13 build-failure categories + 9 runtime-failure categories (diagnosis) |
+| **Hard limits** | model calls (default 3, max 10), unchanged retries (default 1, max 3), build timeout, capped logs, 7 distinct end states |
+| **Infrastructure** | Terraform for a single Azure Ubuntu VM (resource group, VNet, NSG limited to one `/32`, static IP, SSH keys only) |
+| **Evaluation** | 10 fixed scenarios (3 generation, 6 repairable injected faults, 1 must-stop), one-shot vs full loop, Wilson 95% intervals |
 
-| Capability | What it does | Implementation status |
-|---|---|---|
-| Project inspection | Detects Python/Node projects, dependencies, entrypoint, port, and start command | Implemented |
-| Secret-aware context | Excludes secret-like filenames, does not follow symlinks, caps files, and redacts patterns | Implemented |
-| Dockerfile generation | Prompts Ollama and extracts a Dockerfile from its response | Implemented |
-| Deterministic validation | Applies stable E/W rules before Docker execution | Implemented |
-| Staged Docker build | Builds only scanner-approved files, with a timeout and capped log | Implemented |
-| Runtime smoke test | Runs a local HTTP probe in a constrained, temporary container | Implemented |
-| Repair loop | Diagnoses supported failures and allows bounded model repairs/retries | Implemented |
-| Trivy integration | Optionally reports known image vulnerabilities when Trivy is installed | Implemented, optional |
-| Evaluation harness | Runs fixed generation and failure-injection scenarios and writes reports | Implemented, requires real dependencies |
-| Hosted service/API | A network-facing multi-user service | Not implemented |
+### What is verified, and what is not
 
-## How it works
+| Claim | Evidence |
+|---|---|
+| CLI behaviour, loop logic, stop conditions, validators, diagnosis, smoke/scan handling | **Verified:** 186 unit tests pass (`python -m unittest discover -s tests`); CI runs the suite with pytest on Python 3.11 and 3.12. Tests use injected fakes for Docker, Ollama, Trivy and the HTTP probe. |
+| Behaviour against a *real* Docker daemon, model, Trivy, Azure | **Author-reported**, not reproducible from this repository's committed files (see [Demonstrated run](#demonstrated-run-author-reported)). |
+| Success rates and repair effectiveness | **Not measured.** [`docs/EVAL_PROTOCOL.md`](./docs/EVAL_PROTOCOL.md) defines the method; no results are published. |
+| Terraform | Written and used by the author for a test VM. **Not validated by CI** (CI runs tests only). |
+| Hosted/multi-user service, authentication, build isolation for untrusted code | **Not implemented.** |
 
-### System architecture
+---
 
-```mermaid
-flowchart LR
-    U[Project path] --> S[Scanner]
-    S --> C[Approved facts and files]
-    C --> L[Ollama client]
-    L --> G[Dockerfile candidate]
-    G --> V{Validator}
-    V -- invalid --> R[Repair prompt]
-    V -- valid --> B[Docker build]
-    B --> D[Build diagnosis]
-    D -- repairable --> R
-    D -- terminal --> H[Human required]
-    B --> T[Smoke container]
-    T --> Q{HTTP response?}
-    Q -- no --> R
-    Q -- yes --> O[Optional Trivy scan]
-    O --> P[Report]
-    R --> V
-```
-
-### Healing pipeline
+## Architecture
 
 ```mermaid
 flowchart TD
-    A[Inspect project] --> B[Generate Dockerfile]
-    B --> C{Validate}
-    C -- errors --> F[Describe validation failure]
-    C -- valid --> D[Build image]
-    D -- failed --> E[Diagnose build log]
-    D -- succeeded --> G[Run container and probe /health or /]
-    G -- failed --> I[Diagnose runtime log]
-    E --> J{Repair, retry, or stop}
-    I --> J
-    F --> K{Attempts remain?}
-    J -- repair --> K
-    J -- retry --> D
-    K -- yes --> L[Ask Ollama for targeted candidate]
-    L --> C
-    K -- no --> M[Bounded failure report]
-    G -- passed --> N[Success report]
+    R{"Budget left and failure<br/>not already seen?"}
+    S["Scan project<br/>facts + approved files only"] --> G["Model writes Dockerfile"]
+    G --> V{"Validator<br/>7 error / 9 warning rules"}
+    V -- "errors" --> R
+    V -- "ok" --> B["docker build<br/>staged context, timeout, capped log"]
+    B -- "failed" --> D["Classify evidence<br/>ordered rules, redacted"]
+    B -- "built" --> T["Smoke test<br/>hardened container + HTTP probe"]
+    T -- "no answer" --> D
+    T -- "answers" --> X["Optional Trivy scan"]
+    X --> OK["HEALED<br/>report.json + final Dockerfile"]
+    D --> P{"Decision"}
+    P -- "stop: needs a human" --> H["human_required"]
+    P -- "retry: transient network" --> B
+    P -- "repair" --> R
+    R -- "yes" --> M["Model repairs the Dockerfile only<br/>logs fenced as untrusted data"]
+    M --> V
+    R -- "no" --> F["Stop: budget_exhausted,<br/>repeated_failure or no_progress"]
 ```
 
-The stages have deliberately different responsibilities:
+| Module (`src/dockhealer/`) | Responsibility |
+|---|---|
+| `scanner.py` | Detects language, framework, dependency file, entrypoint, port; excludes secret-like files; redacts patterns; never follows symlinks |
+| `llm.py`, `config.py` | Ollama HTTP client (connect/read timeouts, typed errors, temperature 0, seed 42); env-based settings |
+| `generator.py`, `repair.py` | Prompt construction, Dockerfile extraction, targeted repair prompts |
+| `validator.py` | Deterministic Dockerfile rules, no model involved |
+| `builder.py` | Copies only scanner-approved files into a temp context; `docker build` with timeout and capped, redacted log |
+| `diagnose.py` | Ordered rules → category + action (`repair` / `retry` / `stop`) + evidence |
+| `smoke.py` | Starts a restricted container, probes `/health` then `/`, diagnoses runtime failures |
+| `vulnscan.py` | Optional Trivy scan (`--scanners vuln`), parses JSON |
+| `healer.py` | The bounded loop: budgets, fingerprints, stop reasons, `report.json` |
+| `evaluate.py` | Scenario runner, metrics, Wilson intervals, report writer |
+| `cli.py`, `doctor.py` | Commands and environment preflight |
 
-1. **Scan:** reads project metadata and source files as data. It does not execute the project.
-2. **Generate:** asks the configured local Ollama model for a Dockerfile using deterministic facts.
-3. **Validate:** checks Dockerfile structure, `COPY` sources, unsafe patterns, dependency commands,
-   and other rules. A validation failure costs no Docker build.
-4. **Build:** copies only approved files into a temporary context and runs `docker build` with a
-   hard timeout. A successful build means an image exists; it does not mean the app starts.
-5. **Smoke test:** runs the image with no host mounts, dropped capabilities, `no-new-privileges`,
-   512 MiB memory, one CPU, and a 256-process limit. It probes a detected port on localhost.
-   `/health` is preferred, then `/`; any non-5xx HTTP response proves reachability.
-6. **Diagnose and repair:** ordered rules classify build/runtime evidence. The model receives
-   fenced, redacted evidence and can change the Dockerfile only.
-7. **Report:** `report.json` records attempts, findings, build/smoke results, stop reason, model
-   calls, and timing. Successful heals write the final Dockerfile only after build and smoke pass.
+**Stop reasons** (`healer.py`): `built`, `budget_exhausted`, `human_required`, `no_progress`,
+`repeated_failure`, `llm_error`, `environment`.
 
-The default healing budget is three model calls (`--max-attempts 1..10`) and one unchanged rebuild
-after a transient failure (`--max-retries 0..3`). The loop also stops on a terminal diagnosis,
-repeated failure, no progress, an unavailable environment, an LLM error, or an exhausted budget.
+## Engineering highlights
 
-### Failure recovery sequence
-
-```mermaid
-sequenceDiagram
-    participant C as CLI
-    participant H as Healing loop
-    participant D as Docker
-    participant M as Ollama
-    C->>H: heal project
-    H->>M: generate Dockerfile
-    H->>D: validate and build candidate
-    D-->>H: image builds, container fails at startup
-    H->>H: classify redacted runtime evidence
-    H->>M: repair Dockerfile with bounded attempt
-    M-->>H: repaired candidate
-    H->>D: validate, rebuild, and smoke test
-    D-->>H: GET /health -> 200
-    H-->>C: HEALED + report.json
-```
-
-## Technology stack
-
-| Technology | Role in DockHealer | Scope |
+| Challenge | How it is handled | Why it matters |
 |---|---|---|
-| Python 3.11+ | CLI and library implementation; packaged with setuptools | Runtime |
-| `requests` | Typed HTTP client for the Ollama API | Runtime |
-| Docker Engine | Builds images and runs smoke-test containers | Runtime |
-| Ollama | Local model server; default model is `qwen2.5-coder:3b` | Runtime |
-| Trivy | Optional image vulnerability scanner | Runtime, optional |
-| `pytest` | Test runner used locally and in CI | Development |
-| GitHub Actions | Runs tests on Python 3.11 and 3.12 | Development |
-| Terraform + AzureRM | Provisions the test VM, network, and SSH boundary | Cloud deployment |
-| Ubuntu 22.04 | Azure VM operating system image | Cloud deployment |
+| **LLM output cannot be trusted** | A Dockerfile must pass the validator *before* any build is spent; then a real build; then a running container must answer HTTP. Three independent gates. | A built image is weak evidence: only the smoke test catches wrong `CMD`s, missing users, or `127.0.0.1` binds. |
+| **A retry loop must terminate** | Two finite budgets (model calls, retries), a *fingerprint* of each failure (category + failing step) to detect repeats, and a check for "model returned a Dockerfile it already tried". | Termination does not depend on the model behaving. Each loop pass either returns or consumes budget. |
+| **Not every failure is the Dockerfile's fault** | Diagnosis separates a dependency named in the *Dockerfile* (repairable) from one declared by the *project* (`requirements.txt`, `package.json`), which maps to `stop`. The `stop-bad-pin` evaluation scenario only counts as passed if the tool stops with **zero model calls**. | Prevents a model from "fixing" an application bug by thrashing the wrong file. |
+| **Build logs are attacker-influenced text** | Logs are redacted, truncated, and wrapped in `<build_log>` / `<container_log>` tags the system prompt declares untrusted. The model can only return a Dockerfile, and that output is re-validated and rebuilt. | Limits prompt injection from repository content reaching the host. |
+| **Secrets must not reach the model or the daemon** | Secret-like filenames are excluded and never copied into the build context (it is a *staged* copy, not the project directory). Patterns are redacted in prompts and logs. | `.env.example` is excluded in the bundled Flask example (see `inspect` output below). |
+| **Running generated code** | Smoke container: `--cap-drop ALL`, `no-new-privileges`, 512 MiB, 1 CPU, 256 PIDs, no mounts, not privileged, port published on `127.0.0.1` only, always removed in `finally`. | Reduces blast radius; the README is explicit that this is not a sandbox. |
+| **Testing code that needs Docker and an LLM** | Docker runner, clock, build/smoke/scan functions and the model client are injected, so the full loop is tested without a daemon or model. | 186 tests run in under a second; behaviour changes are caught in CI. |
+| **Honest evaluation of a stochastic system** | Metrics and rules written before any run ([`EVAL_PROTOCOL.md`](./docs/EVAL_PROTOCOL.md)); one-shot is read from attempt 1 of the same run (paired); Wilson intervals; simulated runs must be labelled. | Avoids reporting a flattering number from 3 lucky runs. |
 
-The core runtime does not use Kubernetes, AKS, a hosted LLM, or a database. `uv` is a convenient
-Python installation/environment tool used in the Azure setup notes; it is not a Python dependency
-of the package.
+---
 
 ## Quick start
 
-These commands target a Linux environment such as Ubuntu or WSL2. You need Python 3.11+, a running
-Docker Engine, and Ollama with the configured model available.
+Requires Linux or WSL2, Python 3.11+, and (for anything beyond `inspect`/`validate`) a running Docker
+Engine and Ollama.
 
 ```bash
 git clone https://github.com/Ayush-Bansal08/Dockhealer.git
 cd Dockhealer
-
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 python -m pip install -e ".[dev]"
+```
 
-# In another terminal, if Ollama is not already running:
-ollama serve
+**Try it in seconds, with no Docker and no model:**
+
+```bash
+dockhealer inspect examples/flask_app
+dockhealer validate baselines/flask_app.Dockerfile --project examples/flask_app
+dockhealer validate failures/flask__missing_copy_source.Dockerfile --project examples/flask_app   # exit code 3
+```
+
+Real output from this repository:
+
+```text
+$ dockhealer inspect examples/flask_app
+language:   python  framework: flask
+entrypoint: app.py  port: 5000 (detected)
+start:      python app.py
+files sent: 2   excluded: 1
+  excluded .env.example  <- secret-like filename
+
+$ dockhealer validate failures/flask__missing_copy_source.Dockerfile --project examples/flask_app
+  ERROR E007 line 3: COPY source 'reqs.txt' does not exist in the project (or was excluded as a secret/ignored file)
+result: INVALID (1 errors, 0 warnings)
+```
+
+**Full loop** (needs Docker + Ollama):
+
+```bash
+ollama serve &                      # skip if Ollama already runs as a service
 ollama pull qwen2.5-coder:3b
-
-dockhealer doctor
-dockhealer inspect examples/flask_app --context
-dockhealer heal examples/flask_app --max-attempts 3
+dockhealer doctor                   # RAM, disk, Docker daemon, Ollama, model
+dockhealer heal examples/flask_app --max-attempts 3 --out /tmp/flask_out
 ```
 
-The default model, host, and request timeout can be overridden:
+`heal` prints each attempt and a final `RESULT: HEALED` or `NOT HEALED`, and writes
+`runs/<timestamp>-<app>/report.json` plus one `Dockerfile.attemptN` per candidate (`runs/` is
+git-ignored). **Output location:** on success the final Dockerfile is written to `--out DIR`; with
+**no `--out`, it is written into the project directory and replaces an existing `Dockerfile` there.**
 
-```bash
-export DOCKHEALER_MODEL=qwen2.5-coder:3b
-export DOCKHEALER_OLLAMA_HOST=http://localhost:11434
-export DOCKHEALER_TIMEOUT=180
-```
+### Demonstrated run (author-reported)
 
-`heal` creates a timestamped directory under `runs/` containing `report.json` and one
-`Dockerfile.attemptN` per attempted candidate. It writes the final `Dockerfile` into the project
-directory only when the workflow succeeds. Use `--out DIR` to write the successful Dockerfile
-elsewhere. Reports and generated Dockerfiles are runtime artifacts, not guaranteed repository files.
-
-## Demonstrated end-to-end healing result
-
-The repository's deployment record describes a real run against `examples/flask_app`:
-
-```bash
-dockhealer heal examples/flask_app --keep-image --max-attempts 3
-```
-
-The first candidate built, but the container could not start because it selected a `node` user
-that is not present in the Python base image:
+The author reports this run (`dockhealer heal examples/flask_app --keep-image --max-attempts 3`). The first candidate built, but the container failed to start:
 
 ```text
 unable to find user node: no matching entries in passwd file
 ```
 
-The second attempt repaired the Dockerfile, rebuilt the image, and passed the HTTP health probe:
+The generated Dockerfile named a `node` user inside a Python image. The second attempt repaired it
+and passed the probe:
 
 ```text
 BUILD OK + SMOKE OK
@@ -219,248 +184,222 @@ RESULT: HEALED
 smoke test: PASS GET /health -> 200
 ```
 
-This is one demonstrated run, not a universal success rate. The referenced historical report
-`runs/20261025-133602-flask_app/report.json` and repaired `examples/flask_app/Dockerfile` are not
-present in this checkout, so no broken links are provided. Re-run the command above to generate
-current artifacts.
+This is a single run, not a success rate. Its `report.json` is not committed to this repository, so
+it cannot be independently checked from the repo alone; to reproduce, run the command above.
 
-## Azure Deployment: From Terraform to a Working Healing Pipeline
+---
 
-Azure deployment is optional. The Terraform configuration provisions an Ubuntu 22.04 VM, not a
-managed Docker platform. The tested configuration uses:
+## Configuration
 
-- Resource group `dockhealer-rg` in `centralindia`.
-- VM `dockhealer-vm`, default size `Standard_B2s_v2`, and Linux user `dockadmin`.
-- A VNet/subnet, NIC, static public IP, and NSG.
-- SSH public-key authentication with the `ssh_allowed_cidr` variable required to be a single `/32`.
-- A 64 GB Standard_LRS OS disk and no password authentication.
-- Minimal cloud-init packages (`curl`, `git`, `jq`, Python 3, venv, and pip).
+DockHealer needs no API keys. All settings are optional environment variables (`config.py`):
 
-Cloud-init intentionally does **not** install Docker or Ollama. Those were installed manually after
-provisioning. The deployment record also describes installing Python 3.12 with `uv`, creating a
-virtual environment, installing DockHealer, and pulling `qwen2.5-coder:3b` and `llama3.2:1b` for
-local CPU inference. DockHealer itself defaults to `qwen2.5-coder:3b`; select another pulled model
-with `DOCKHEALER_MODEL`.
+| Variable | Purpose | Default |
+|---|---|---|
+| `DOCKHEALER_MODEL` | Ollama model used for generation and repair | `qwen2.5-coder:3b` |
+| `DOCKHEALER_OLLAMA_HOST` | Ollama base URL (`http://` is added if the scheme is missing) | `http://localhost:11434` |
+| `OLLAMA_HOST` | Fallback if `DOCKHEALER_OLLAMA_HOST` is unset | — |
+| `DOCKHEALER_TIMEOUT` | Read timeout for a model reply, in seconds (the first call loads the model) | `180` |
 
-### Azure architecture
+## CLI reference
+
+`dockhealer <command> --help` is authoritative.
+
+| Command | Purpose | Notable options |
+|---|---|---|
+| `doctor` | Check Python, RAM, disk, Docker daemon, Ollama, model | `--json` |
+| `inspect PATH` | Show detected stack and what the model would see | `--json`, `--context` |
+| `validate FILE` | Lint a Dockerfile (no model, no Docker) | `--project DIR` enables `COPY`-path and entrypoint checks |
+| `generate PATH` | Model writes a Dockerfile; validated; written only if valid | `--out`, `--force` |
+| `build PATH` | Validate, then `docker build`, diagnose failures | `--dockerfile`, `--timeout`, `--keep-image`, `--skip-validation`, `--save-log` |
+| `heal PATH` | The full bounded loop | `--max-attempts 1..10`, `--max-retries 0..3`, `--timeout`, `--out`, `--force`, `--keep-image`, `--no-smoke`, `--scan`, `--report-dir` |
+| `smoke IMAGE` | Run an existing image in the hardened container and probe it | `--project DIR` (required), `--timeout` |
+| `scan IMAGE` | Trivy vulnerability scan (optional tool) | `--severity`, `--fail-on` |
+| `eval` | Run the evaluation scenarios | `--trials`, `--only`, `--scan`, `--no-smoke`, `--out`, `--provenance`, `--report-only DIR` |
+| `ask PROMPT` | Send one prompt to the model | `--model` |
+
+Exit codes: `0` success · `1` unsupported project or failing `doctor` check · `2` usage or
+environment error (e.g. Docker or model unavailable, output file exists) · `3` Dockerfile failed
+validation · `4` build/heal failed, or `scan --fail-on` matched · `5` smoke test skipped (no
+application port detected).
+
+## Testing
+
+```bash
+python -m pytest -q                       # what CI runs
+python -m unittest discover -s tests      # equivalent, no pytest needed
+```
+
+186 tests cover the scanner, validator, builder, diagnosis fixtures, the healing loop and its stop
+conditions, smoke and Trivy handling, the evaluation harness, and CLI behaviour. They use injected
+fakes, so **they prove the logic, not real Docker/Ollama/Trivy behaviour**; the diagnosis fixtures in
+`tests/fixtures/` were written by hand as approximations of Docker output (the `build --save-log` option exists to capture real ones). One part is real: the HTTP probe
+is tested against a local `http.server`.
+
+CI ([`ci.yml`](./.github/workflows/ci.yml)) runs the suite on Python 3.11 and 3.12. It does not run
+Terraform checks or any Docker-dependent test.
+
+## Evaluation
+
+[`docs/EVAL_PROTOCOL.md`](./docs/EVAL_PROTOCOL.md) fixes the metrics before any run. Scenarios live in
+[`evaluation/scenarios.json`](./evaluation/scenarios.json):
+
+| Kind | Scenarios | Expectation |
+|---|---|---|
+| Generate | Flask, FastAPI, Express examples | model-built image passes smoke test |
+| Inject (repairable) | bad base image, typo in requirements path, missing apt package, missing `COPY` source (caught by the validator), `npm ci` without lockfile, app bound to `127.0.0.1` | repaired within budget |
+| Inject (must stop) | project pins `flask==99.0.0`, which does not exist | `human_required` with **0** model calls |
+
+The comparison is **one-shot** (attempt 1 of each run) vs the **full loop**, with 95% Wilson
+intervals and per-scenario tables.
+
+```bash
+dockhealer eval --trials 3 --scan --out runs/eval-final      # many builds and model calls
+dockhealer eval --report-only runs/eval-final                # re-render report.md
+```
+
+**No results are published here**, because they must come from a real Docker + Ollama run. Threats
+to validity, stated up front: tiny hand-written apps; faults chosen by the author, who also wrote the
+classifier (optimistic bias); one machine; small `n`.
+
+---
+
+## Azure deployment (Terraform)
+
+Optional, and never required to use the tool. DockHealer needs a Docker daemon, so the target is a
+**single VM**, not a managed container platform.
 
 ```mermaid
 flowchart LR
-    Dev[Developer laptop] -->|terraform plan/apply| TF[Terraform]
-    TF --> RG[Azure resource group]
-    Dev -->|SSH key, allowed /32 only| NSG[NSG on NIC]
-    RG --> VNet[VNet and subnet]
-    NSG --> VM[Ubuntu 22.04 VM]
-    VNet --> VM
-    VM --> D[Docker Engine]
-    VM --> DH[DockHealer CLI]
-    VM --> O[Ollama local service]
-    O --> M[qwen2.5-coder:3b / optional llama3.2:1b]
-    DH --> D
-    D --> R[Build and smoke-test results]
+    Dev["Developer machine"] -- "terraform plan / apply" --> TF["Terraform + AzureRM 4.x"]
+    TF --> RG["Resource group"]
+    Dev -- "SSH key auth, TCP 22 from one /32" --> NSG["NSG on the NIC"]
+    RG --> NET["VNet + subnet + static public IP"]
+    NSG --> VM["Ubuntu 22.04 VM<br/>Docker, Ollama, DockHealer"]
+    NET --> VM
 ```
 
-The VM was used for testing; this README does not claim that it is currently running. A static
-public IP is configured by Terraform, but the address should still be obtained from Terraform
-outputs rather than copied into documentation.
+[`infra/azure/worker/`](./infra/azure/worker/) provisions: resource group (`centralindia` by default),
+VNet and subnet, NSG (only inbound rule: TCP 22 from `ssh_allowed_cidr`, validated to be a single
+`/32`), static Standard public IP, NIC, and an Ubuntu 22.04 Linux VM (default `Standard_B2s_v2`, 64 GB
+Standard_LRS disk, **password login disabled**, **no managed identity**). Cloud-init installs only
+`ca-certificates`, `curl`, `git`, `jq`, Python 3, venv and pip. **Docker, Ollama, and DockHealer are
+installed manually afterwards**; Terraform does not do that. The provider is locked in
+`.terraform.lock.hcl`.
 
-### Reproduce the deployment
-
-Prerequisites: an Azure subscription with permission to create the listed resources, Azure CLI,
-Terraform 1.5+, a local SSH key pair, and an allowed public IPv4 address. Keep `terraform.tfvars`,
-Terraform state, and private keys out of Git; `.gitignore` excludes common sensitive Terraform
-files.
+| Implemented | Not implemented (see [`DEPLOYMENT_PLAN.md`](./docs/DEPLOYMENT_PLAN.md) for the target design) |
+|---|---|
+| VNet, NSG, static IP, VM, SSH-key access | Auto-shutdown schedule, budget alert |
+| Local Terraform state | Remote state, Terraform checks in CI, OIDC deployment |
+| Manual bootstrap of Docker/Ollama/DockHealer | Automated bootstrap script |
 
 ```bash
 az login
 cd infra/azure/worker
-
-# Supply your own values; do not commit this file.
-cat > terraform.tfvars <<'EOF'
+cat > terraform.tfvars <<'EOF'      # git-ignored; use your own values
 ssh_public_key_path = "/home/you/.ssh/id_ed25519.pub"
 ssh_allowed_cidr    = "203.0.113.10/32"
 EOF
-
-terraform init
-terraform plan
-terraform apply
-terraform output
-VM_IP="$(terraform output -raw vm_public_ip)"
-ssh -i ~/.ssh/id_ed25519 dockadmin@"$VM_IP"
+terraform init && terraform plan
+terraform apply                      # creates billable resources; read the plan first
+ssh -i ~/.ssh/id_ed25519 dockadmin@"$(terraform output -raw vm_public_ip)"      # default admin_username
 ```
 
-After SSH access is available, install the software in the VM according to the host's supported
-instructions, then verify each layer:
+On the VM, install Docker Engine and Ollama from their official instructions, then Python 3.11+
+(**Ubuntu 22.04's system Python is 3.10, below DockHealer's minimum**; per the author's notes, `uv` was used to install
+3.12), clone this repository, `pip install -e ".[dev]"`, and run `dockhealer doctor`.
 
-```bash
-# Docker Engine: install from the official Docker Ubuntu instructions, then:
-sudo docker run hello-world
+When done: `terraform destroy` removes everything; or deallocate the VM (disk and static IP still bill).
+**Do not commit** `terraform.tfvars`, state, or saved plan files (`terraform plan -out=...`): they can
+contain your public IP, subscription ID and SSH public key.
 
-# Ollama: install from the official Ollama instructions:
-ollama pull qwen2.5-coder:3b
-ollama pull llama3.2:1b
+## Security model
 
-# Python 3.12 and uv, then DockHealer:
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv python install 3.12
-uv venv --python 3.12 .venv
-source .venv/bin/activate
-python -m pip install -e ".[dev]"
+| Control | Status |
+|---|---|
+| Secret-like filenames excluded; patterns redacted in prompts and logs; symlinks not followed; file count/size caps | Implemented (pattern-based, so it can miss secrets) |
+| Build uses a staged copy of approved files only; list-form subprocess calls (no shell); timeouts; capped logs | Implemented |
+| Model output limited to Dockerfile text; re-validated and rebuilt; logs fenced as untrusted data | Implemented (reduces, not eliminates, prompt-injection risk) |
+| Smoke container: dropped capabilities, `no-new-privileges`, memory/CPU/PID limits, no mounts, loopback-only port | Implemented |
+| Azure: SSH from one `/32`, key-only login, no managed identity on the VM | Implemented in Terraform |
+| Build-time network/CPU/disk isolation, per-run disposable VM, gVisor/Kata, egress filtering | **Not implemented** |
+| Authentication, rate limits, multi-user separation, audit log | **Not implemented** (there is no server) |
 
-dockhealer doctor
-dockhealer heal examples/flask_app --keep-image --max-attempts 3
-pytest -q
-```
+A Dockerfile's `RUN` steps execute arbitrary code during `docker build`, and containers share the
+host kernel. **Do not run DockHealer on repositories you do not trust, on a machine that holds
+credentials you care about.** Trivy, when enabled, lists *known* CVEs only: no findings is not
+proof of security.
 
-Copy or clone the repository onto the VM before the final commands. The exact Docker Engine and
-Ollama installation commands are intentionally delegated to their current upstream instructions;
-Terraform does not perform those installations. When finished, deallocate or destroy the test
-environment as appropriate:
+## Troubleshooting
 
-```bash
-az vm deallocate --resource-group "$(terraform output -raw resource_group_name)" \
-  --name "$(terraform output -raw vm_name)"
-# Or, when the environment is no longer needed:
-terraform destroy
-```
-
-## CLI reference
-
-Run `dockhealer --help` or `<command> --help` for the live parser. The implemented commands are:
-
-| Command | Usage and important options | Purpose |
-|---|---|---|
-| `doctor` | `dockhealer doctor [--json]` | Checks RAM, Docker, Ollama, and model availability. |
-| `inspect` | `dockhealer inspect PATH [--json] [--context]` | Prints detected stack facts and optionally the exact model context. |
-| `validate` | `dockhealer validate DOCKERFILE [--project PROJECT]` | Runs deterministic validation without a model or Docker build. |
-| `generate` | `dockhealer generate PATH [--out DIR] [--force]` | Generates and validates a Dockerfile; writes it only if valid. |
-| `build` | `dockhealer build PATH [--dockerfile FILE] [--timeout SECONDS] [--keep-image] [--skip-validation] [--save-log FILE]` | Validates, builds, diagnoses failures, and optionally saves a redacted log. |
-| `heal` | `dockhealer heal PATH [--max-attempts 1..10] [--max-retries 0..3] [--timeout SECONDS] [--out DIR] [--force] [--keep-image] [--no-smoke] [--scan] [--report-dir DIR]` | Runs generation/repair, validation, build, smoke test, optional scan, and reporting. |
-| `smoke` | `dockhealer smoke IMAGE --project PROJECT [--timeout SECONDS]` | Runs the hardened HTTP smoke test against an existing image. |
-| `scan` | `dockhealer scan IMAGE [--severity SEVERITIES] [--fail-on SEVERITY]` | Runs optional Trivy scanning; severities are `CRITICAL,HIGH,MEDIUM,LOW,UNKNOWN`. |
-| `eval` | `dockhealer eval [--scenarios FILE] [--root DIR] [--trials N] [--max-attempts N] [--timeout SECONDS] [--only IDS] [--no-smoke] [--scan] [--out DIR] [--provenance TEXT]` | Runs the fixed evaluation corpus and writes JSONL/metadata/Markdown reports. |
-| `eval` report | `dockhealer eval --report-only DIR` | Re-renders `report.md` from stored evaluation results. |
-| `ask` | `dockhealer ask PROMPT [--model MODEL]` | Sends a direct prompt to Ollama. |
-
-`--keep-image` prevents successful build images from being removed. `--max-attempts` limits model
-calls, while `--max-retries` limits unchanged rebuilds after a transient diagnosis. `--no-smoke`
-is useful for a build-only workflow but removes the runtime guarantee from the result.
-
-## Testing and evaluation
-
-The project uses `pytest` and the CI workflow tests Python 3.11 and 3.12:
-
-```bash
-pytest -q
-# or
-python -m pytest -q
-```
-
-The unit tests inject fakes for Docker, Ollama, Trivy, and HTTP probing. They cover scanner
-behavior, prompt/model errors, validation rules, build handling, smoke diagnosis, repair decisions,
-CLI behavior, report generation, and stop conditions. They do not prove behavior with a real Docker
-daemon, real model, or Azure VM.
-
-For a real evaluation, inspect and freeze [evaluation/scenarios.json](./evaluation/scenarios.json),
-then run:
-
-```bash
-ollama serve
-docker info
-dockhealer eval --trials 3 --scan --out runs/eval-final
-dockhealer eval --report-only runs/eval-final
-```
-
-The protocol compares one-shot generation with the bounded loop, includes three small generation
-scenarios, six repairable injected faults, and one must-stop dependency fault. It records sample
-sizes and 95% Wilson intervals. No results are published here because they must come from a real
-Docker/Ollama run.
-
-## Repository structure
-
-```text
-src/dockhealer/             Python package and CLI
-  scanner.py                safe project facts and redacted model context
-  generator.py / repair.py  candidate and targeted repair prompts
-  validator.py              deterministic E/W Dockerfile rules
-  builder.py                staged Docker build and log handling
-  smoke.py                  constrained container and HTTP probe
-  healer.py                 bounded orchestration and JSON reports
-  evaluate.py               scenario runner and report writer
-tests/                      unit tests driven by injected fakes
-examples/                   Flask, FastAPI, Express, and broken-project examples
-baselines/                  hand-written reference Dockerfiles
-failures/                   intentional failure-injection Dockerfiles
-evaluation/                 scenario manifest and evaluation inputs
-infra/azure/worker/         Terraform, variables, outputs, and cloud-init
-docs/                       deployment, evaluation, lessons, and engineering notes
-runs/                       generated run/evaluation artifacts when created locally
-```
+| Symptom | Likely cause and check |
+|---|---|
+| `[FAIL] docker ... daemon unreachable` | Start Docker (Desktop + WSL integration on Windows). Verify with `docker version`. |
+| `[FAIL] ollama not reachable` | Run `ollama serve`; check `DOCKHEALER_OLLAMA_HOST`; `curl http://localhost:11434/api/version`. |
+| `model ... not pulled` | `ollama pull qwen2.5-coder:3b`, or set `DOCKHEALER_MODEL` to a pulled model. |
+| Model call times out | First call loads the model into RAM on CPU: raise `DOCKHEALER_TIMEOUT` (default 180 s). |
+| `refusing to build: Dockerfile failed validation` (exit 3) | `dockhealer validate FILE --project DIR` lists rule IDs. `--skip-validation` overrides, at your risk. |
+| `heal` stops with `human_required` and `DEPENDENCY_IN_PROJECT` | A dependency declared by the project itself cannot be installed; fix `requirements.txt`/`package.json`. This is by design: the Dockerfile cannot fix it. |
+| `no_progress` / `repeated_failure` | The model repeated a Dockerfile or failure. Read the attempts in `runs/.../report.json`; try a larger model via `DOCKHEALER_MODEL`. |
+| Output file exists (exit 2) | With `--out`, add `--force`. Without `--out`, `heal` overwrites the project's Dockerfile. |
+| Smoke test `SKIPPED` (exit 5) | No application port was detected; check `dockhealer inspect PATH`. |
+| Scan reported as skipped | Trivy is not installed; install it from its official documentation. |
+| Terraform rejects `ssh_allowed_cidr` | It must be a single IPv4 address with `/32`. |
 
 ## Engineering decisions and trade-offs
 
-- **Build plus smoke test:** an image existing is weaker evidence than a container starting and
-  answering. The two checks catch different classes of failure.
-- **Validation before execution:** deterministic checks are cheap, repeatable, and can reject
-  missing `COPY` sources or dangerous patterns before spending a build.
-- **Bounded repair:** finite model-call and retry budgets prevent an unreliable model or transient
-  failure from creating an unbounded process. Repeated failures and no-progress candidates stop
-  early.
-- **Ollama:** local inference avoids a paid API and keeps source context on the machine, at the
-  cost of CPU/RAM usage and model quality/latency constraints.
-- **Single Azure VM:** DockHealer needs a Docker daemon and a local Ollama process. A Terraform-
-  managed VM is a simpler fit for a single-user test than AKS, at the cost of single-node
-  availability and manual software bootstrap.
-- **Staged contexts:** scanner-approved files are copied to a temporary Docker context so excluded
-  `.env`, keys, state, and ignored directories are not sent to the daemon by accident.
+| Decision | Reason | Trade-off / alternative |
+|---|---|---|
+| Local Ollama model | No paid API; source code stays on the machine | CPU-only latency and weaker repairs than a hosted model. A provider interface would allow hosted models later. |
+| Build **and** run the image | A built image is weak evidence | Slower, and requires a Docker daemon. |
+| Validate before building | Free, instant, repeatable; saves a build | Rules are hand-written, so coverage is limited to what they encode. |
+| Bounded budgets + failure fingerprints | Guaranteed termination regardless of model behaviour | A repair that needs more than the budget stops as `budget_exhausted`. |
+| Single VM instead of AKS or a container service | A Docker daemon and a local model are required; one VM is the simplest fit | No high availability; manual bootstrap. Privileged or Docker-in-Docker containers were rejected on security grounds. |
+| Local Terraform state | Single operator, throwaway environment | No locking or sharing; move to a remote backend if CI applies changes. |
+| Injected dependencies in the code | Whole loop testable without Docker, a model, or a network | Fakes can diverge from real behaviour, hence the planned real-run evaluation. |
 
-## Security and limitations
+## Known limitations
 
-### Precautions implemented today
+- Supports the implemented Python (Flask, FastAPI, Django detection) and Node (Express) paths, plus
+  generic detection from `requirements.txt` / `pyproject.toml` / `package.json`. Other layouts are not handled.
+- Evaluation numbers are unpublished; the corpus is three small apps.
+- Docker build log wording varies by version; fixtures are hand-written.
+- Running the test suite creates an untracked `examples/flask_app/Dockerfile` (one CLI test writes
+  to the example directory). It is git-ignored, but delete it before committing, because other tests assume the
+  example has no Dockerfile.
+- Isolation is "reasonable accident prevention", not a sandbox (see [Security model](#security-model)).
 
-- Secret-like filenames, symlinks, and common generated directories are excluded from scans.
-- Secret-looking values are redacted before model prompts and in captured evidence.
-- Docker builds use list-form subprocess arguments, a staged context, a timeout, and capped logs.
-- Smoke containers have no host mounts, dropped capabilities, `no-new-privileges`, resource limits,
-  and localhost-only port publishing; they are removed in cleanup.
-- The model controls Dockerfile text, not an arbitrary host command.
-- Validation and bounded budgets reduce accidental damage but are not a security boundary.
+## Roadmap
 
-### Risks and limitations
+Ordered by value to credibility, all **planned, not implemented**:
 
-Building an untrusted project can execute arbitrary build-time code, and running its image still
-shares the host kernel. Docker daemon access is highly privileged. Build steps have no complete
-network, CPU, disk, or VM isolation policy. Source code sent to a local model may contain sensitive
-business logic even after filename and pattern filtering. Model output can be wrong, and bounded
-repair does not imply successful repair. Trivy, when enabled, reports known CVEs; it is not a full
-security verdict. The scanner supports the currently implemented Python and Node detection paths,
-not every framework or repository layout.
+1. Publish a real `dockhealer eval` report (and commit a sanitised sample `report.json` for the demonstrated run).
+2. Terraform `fmt`/`validate`/`tflint` in CI; remote state if CI applies infrastructure.
+3. Run builds in a disposable VM with egress filtering; block the cloud metadata endpoint.
+4. Run IDs and structured (JSON) logs with per-run metrics.
+5. Optional hosted-LLM provider behind the existing client interface (with 429 handling).
+6. Replace the hand-written log fixtures with captured real Docker logs.
+7. Larger and more varied evaluation corpus.
 
-For untrusted multi-tenant workloads, stronger isolation such as throw-away VMs or gVisor/Kata,
-network policy, quotas, authentication, audit logging, retention controls, and a separate worker
-service would be needed. Those are recommendations/future work, not current features.
+## Repository layout and docs
 
-## Future directions
+```text
+src/dockhealer/     package and CLI              tests/         unit tests + log fixtures
+examples/           Flask, FastAPI, Express       baselines/     hand-written reference Dockerfiles
+failures/           intentionally broken Dockerfiles   evaluation/   scenario manifest
+infra/azure/worker/ Terraform for the Azure VM    docs/          protocol, plan, lessons
+```
 
-Potential next steps include stronger build isolation, richer repair-success measurement, CI
-integration, more representative applications, structured observability, and a web/API interface.
-None of these should be read as implemented functionality.
+- [Evaluation protocol](./docs/EVAL_PROTOCOL.md): metrics and rules, fixed before running.
+- [Deployment plan](./docs/DEPLOYMENT_PLAN.md): the broader target design and cost reasoning, written
+  before provisioning (parts, such as auto-shutdown and OIDC CI, are not implemented).
+- Phase notes: [4](./docs/PHASE4_LESSONS.md), [5](./docs/PHASE5_LESSONS.md), [6](./docs/PHASE6_LESSONS.md),
+  [7](./docs/PHASE7_LESSONS.md); also [progress](./docs/PROGRESS.md) and [interview Q&A](./docs/INTERVIEW_QA.md).
 
-## Contributing
+## Contributing, license, author
 
-Create a focused branch, add or update tests for behavior changes, run `pytest -q`, and keep
-documentation aligned with the actual CLI and implementation. For changes to evaluation scenarios,
-follow [docs/EVAL_PROTOCOL.md](./docs/EVAL_PROTOCOL.md) and rerun real measurements before
-publishing numbers.
+Open an issue or branch, add or update tests for behaviour changes, run `python -m pytest -q`, and
+keep this README aligned with the CLI. For evaluation changes follow the protocol and re-measure
+before publishing numbers. **No license file is present**, so no open-source license is granted; add
+one before inviting reuse.
 
-## License
-
-No license file is present in this repository, so no open-source license is claimed here. Add a
-license before presenting DockHealer as reusable under specific terms.
-
-## Further reading
-
-- [Evaluation protocol](./docs/EVAL_PROTOCOL.md)
-- [Deployment plan and trade-offs](./docs/DEPLOYMENT_PLAN.md)
-- [Azure Terraform module](./infra/azure/worker/)
-- [CI workflow](./.github/workflows/ci.yml)
+Author: Ayush Bansal · [GitHub profile](https://github.com/Ayush-Bansal08)
